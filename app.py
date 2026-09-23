@@ -8,19 +8,20 @@ import datetime
 import extra_streamlit_components as stx
 from PIL import Image
 import pytesseract
-from thefuzz import process, fuzz  # Importato fuzz per le regole rigorose
+from thefuzz import process, fuzz
 
 # -----------------------------------------------------------------------------
 # 1. CONFIGURAZIONE PAGINA STREAMLIT
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Algo-Custom | Fantacalcio Advisory App",
+    page_title="Algo-Custom | Fantacalcio Premium",
     page_icon="⚽",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-st.title("⚽ Algo-Custom: Schiera la Formazione Ideale")
-st.caption("Il tuo assistente algoritmico personalizzato per vincere al Fantacalcio")
+st.title("⚽ Algo-Custom: Formazione Premium")
+st.caption("Intelligenza Artificiale, Controllo Totale e Analisi Matchup")
 
 # -----------------------------------------------------------------------------
 # 2. CARICAMENTO DATABASE SERIE A
@@ -43,6 +44,7 @@ def load_database():
     df["Fattore_Campo"] = df["Squadra"].apply(lambda x: 0.5 if x in squadre_in_casa else 0.0)
     df["Bonus_Specialista"] = df["Nome"].apply(lambda x: 1.0 if x in rigoristi else 0.0)
 
+    # Scala da 1 a 10 per la forza delle squadre
     stat = df.groupby('Squadra').agg({'Gf': 'sum', 'Gs': 'sum'})
     min_gf, max_gf = stat['Gf'].min(), stat['Gf'].max()
     min_gs, max_gs = stat['Gs'].min(), stat['Gs'].max()
@@ -75,21 +77,23 @@ def cerca_lega_e_dettagli(nome_lega, nome_squadra, df_database):
 # -----------------------------------------------------------------------------
 # 3. SIDEBAR: GESTIONE COOKIE E CARICAMENTO ROSA
 # -----------------------------------------------------------------------------
-st.sidebar.header("📥 Gestione Rosa")
-
+st.sidebar.header("📥 La Tua Rosa")
 cookie_manager = stx.CookieManager(key="cookie_manager")
 
 if "ignora_cookie" not in st.session_state: st.session_state["ignora_cookie"] = False
 if "svuota_memoria" not in st.session_state: st.session_state["svuota_memoria"] = False
 if "richiesta_salvataggio" not in st.session_state: st.session_state["richiesta_salvataggio"] = False
+if "widget_key" not in st.session_state: st.session_state["widget_key"] = 1
 
 def rimuovi_rosa_callback():
     st.session_state["svuota_memoria"] = True
     st.session_state["ignora_cookie"] = True
+    st.session_state["widget_key"] += 1
 
 def salva_rosa_callback():
     st.session_state["richiesta_salvataggio"] = True
     st.session_state["ignora_cookie"] = False
+    st.session_state["widget_key"] += 1
 
 rosa_salvata_str = cookie_manager.get(cookie="algo_custom_rosa")
 
@@ -101,181 +105,146 @@ if st.session_state["ignora_cookie"]:
     rosa_salvata_str = None
 
 rosa_utente = pd.DataFrame()
-usa_modificatore = True
-bonus_porta_inviolata = False
 
 # SCENARIO A: ROSA GIÀ SALVATA
 if rosa_salvata_str:
-    st.sidebar.success("✅ Rosa ricaricata dalla memoria del telefono!")
     nomi_salvati = rosa_salvata_str.split(",")
     rosa_utente = df_serie_a[df_serie_a["Nome"].isin(nomi_salvati)].copy()
-    
-    st.sidebar.markdown("---")
-    usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa", value=True)
-    
-    st.sidebar.button("🗑️ Rimuovi Rosa", on_click=rimuovi_rosa_callback, use_container_width=True)
+    st.sidebar.success(f"✅ Trovati {len(rosa_utente)} giocatori in memoria!")
+    st.sidebar.button("🔄 Cambia/Rimuovi Rosa", on_click=rimuovi_rosa_callback, use_container_width=True)
 
 # SCENARIO B: NESSUNA ROSA SALVATA -> MOSTRA OPZIONI
 else:
     metodo_rosa = st.sidebar.radio(
-        "Scegli come importare la rosa:",
-        ["📸 Scansiona Screenshot OCR", "🔍 Ricerca Nome Lega", "✏️ Incolla Nomi", "📁 File CSV/Excel"]
+        "Importa la tua squadra:",
+        ["📸 OCR (Screenshot)", "🔍 Ricerca Lega", "✏️ Testo", "📁 CSV/Excel"]
     )
 
-    # --- METODO 1: OCR MULTISCREEN (CERVELLO POTENZIATO) ---
-    if metodo_rosa == "📸 Scansiona Screenshot OCR":
-        st.sidebar.markdown("---")
-        usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa", value=True)
-        st.sidebar.info("Scatta 2 o 3 screenshot per inquadrare tutta la rosa e caricali insieme.")
-        
-        uploaded_imgs = st.sidebar.file_uploader("Carica Screenshot", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
-        
+    if metodo_rosa == "📸 OCR (Screenshot)":
+        uploaded_imgs = st.sidebar.file_uploader("Carica 2-3 Screenshot", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key=f"ocr_{st.session_state['widget_key']}")
         if uploaded_imgs:
-            with st.spinner("🧠 Intelligenza Artificiale in lettura... Elaborazione avanzata."):
-                testo_grezzo_totale = ""
-                for uploaded_img in uploaded_imgs:
-                    img = Image.open(uploaded_img)
-                    testo_grezzo_totale += pytesseract.image_to_string(img) + "\n"
-                
+            with st.spinner("🧠 Scansione in corso..."):
+                testo_grezzo_totale = "".join([pytesseract.image_to_string(Image.open(i)) + "\n" for i in uploaded_imgs])
                 righe = testo_grezzo_totale.split('\n')
                 nomi_db = df_serie_a["Nome"].tolist()
                 squadre_db = [str(s).lower() for s in df_serie_a["Squadra"].unique()]
                 
                 giocatori_trovati = []
                 for riga in righe:
-                    riga_lower = riga.lower()
-                    
-                    # 1. ELIMINA TUTTI I NUMERI (Voti, Crediti, Quotazioni)
-                    riga_senza_numeri = ''.join([c for c in riga_lower if not c.isdigit()])
-                    
-                    # 2. BLACKLIST ESPRESSA (Rimuove Ruoli e intestazioni Fantacalcio)
-                    riga_pulita = re.sub(r'\b(por|dif|cen|att|portieri|difensori|centrocampisti|attaccanti|voto|media|fantamedia|quotazione|svincola|giocatore|ruolo)\b', '', riga_senza_numeri, flags=re.IGNORECASE)
-                    
-                    riga_pulita = riga_pulita.strip()
-                    
-                    # 3. SALTA SE LA RIGA È TROPPO CORTA (Sotto i 3 caratteri non ci sono nomi veri)
-                    if len(riga_pulita) < 3:
-                        continue
-                        
-                    # 4. SALTA I NOMI DELLE SQUADRE 
-                    if riga_pulita in squadre_db:
-                        continue
-                        
-                    # 5. RICERCA RIGOROSA (token_set_ratio) -> Richiede che il nome corrisponda davvero!
-                    risultato = process.extractOne(riga_pulita, nomi_db, scorer=fuzz.token_set_ratio)
-                    if risultato:
-                        match, score = risultato
-                        if score >= 85:  # Punteggio di confidenza molto alto
-                            giocatori_trovati.append(match)
+                    r_pulita = re.sub(r'\b(por|dif|cen|att|portieri|difensori|centrocampisti|attaccanti|voto|media|fantamedia|quotazione|svincola|giocatore|ruolo)\b', '', ''.join([c for c in riga.lower() if not c.isdigit()]), flags=re.IGNORECASE).strip()
+                    if len(r_pulita) < 3 or r_pulita in squadre_db: continue
+                    risultato = process.extractOne(r_pulita, nomi_db, scorer=fuzz.token_set_ratio)
+                    if risultato and risultato[1] >= 85: giocatori_trovati.append(risultato[0])
                 
-                giocatori_unici = list(set(giocatori_trovati))
-                rosa_utente = df_serie_a[df_serie_a["Nome"].isin(giocatori_unici)].copy()
-                
-                if len(rosa_utente) > 0:
-                    st.sidebar.success(f"Scansione completata! Trovati {len(rosa_utente)} giocatori reali.")
-                else:
-                    st.sidebar.error("L'algoritmo non ha riconosciuto giocatori in modo sicuro. Prova con foto più a fuoco o senza pubblicità.")
+                rosa_utente = df_serie_a[df_serie_a["Nome"].isin(list(set(giocatori_trovati)))].copy()
+                if len(rosa_utente) > 0: st.sidebar.success(f"Trovati {len(rosa_utente)} giocatori!")
 
-    elif metodo_rosa == "🔍 Ricerca Nome Lega":
-        st.sidebar.markdown("---")
-        if "step_ricerca" not in st.session_state: st.session_state["step_ricerca"] = 1
-        if st.session_state["step_ricerca"] == 1:
-            with st.sidebar.form("form_ricerca"):
-                input_lega = st.text_input("Nome Lega")
-                input_squadra = st.text_input("Nome Squadra")
-                if st.form_submit_button("Cerca") and input_lega and input_squadra:
-                    with st.spinner("Ricerca..."):
-                        ris = cerca_lega_e_dettagli(input_lega, input_squadra, df_serie_a)
-                        if ris["esito"]:
-                            st.session_state["dati_trovati"] = ris
-                            st.session_state["step_ricerca"] = 2
-                            st.rerun()
-                        else: st.sidebar.error("Lega Privata o non trovata.")
-        elif st.session_state["step_ricerca"] == 2:
-            usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa", value=True)
-            rosa_utente = st.session_state["dati_trovati"]["rosa"]
-            if st.sidebar.button("Nuova Ricerca"):
-                st.session_state["step_ricerca"] = 1
-                st.rerun()
+    elif metodo_rosa == "🔍 Ricerca Lega":
+        with st.sidebar.form("form_ricerca"):
+            input_lega = st.text_input("Nome Lega")
+            input_squadra = st.text_input("Nome Squadra")
+            if st.form_submit_button("Cerca") and input_lega and input_squadra:
+                with st.spinner("Ricerca..."):
+                    ris = cerca_lega_e_dettagli(input_lega, input_squadra, df_serie_a)
+                    if ris["esito"]: rosa_utente = ris["rosa"]
+                    else: st.sidebar.error("Lega Privata o non trovata.")
 
-    elif metodo_rosa == "✏️ Incolla Nomi":
-        st.sidebar.markdown("---")
-        usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa", value=True)
-        testo = st.text_area("Incolla i nomi separati da una virgola:")
-        if testo: 
-            rosa_utente = df_serie_a[df_serie_a["Nome"].isin([n.strip() for n in testo.split(',') if n.strip()])].copy()
+    elif metodo_rosa == "✏️ Testo":
+        testo = st.text_area("Incolla i nomi (separati da virgola):", key=f"testo_{st.session_state['widget_key']}")
+        if testo: rosa_utente = df_serie_a[df_serie_a["Nome"].isin([n.strip() for n in testo.split(',') if n.strip()])].copy()
 
-    elif metodo_rosa == "📁 File CSV/Excel":
-        st.sidebar.markdown("---")
-        usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa", value=True)
-        uploaded_file = st.file_uploader("Trascina file", type=["xlsx", "csv"])
+    elif metodo_rosa == "📁 CSV/Excel":
+        uploaded_file = st.sidebar.file_uploader("Trascina file", type=["xlsx", "csv"], key=f"csv_{st.session_state['widget_key']}")
         if uploaded_file:
             df_user = pd.read_csv(uploaded_file, sep=';', encoding='latin1') if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
             col_nome = [c for c in df_user.columns if 'nome' in str(c).lower() or 'giocatore' in str(c).lower()]
-            if col_nome: 
-                rosa_utente = df_serie_a[df_serie_a["Nome"].isin(df_user[col_nome[0]].dropna().unique())].copy()
+            if col_nome: rosa_utente = df_serie_a[df_serie_a["Nome"].isin(df_user[col_nome[0]].dropna().unique())].copy()
 
-    # TASTO SALVATAGGIO MANUALE
     if not rosa_utente.empty:
-        st.sidebar.markdown("---")
-        st.sidebar.button("💾 Salva Rosa per il futuro", on_click=salva_rosa_callback, use_container_width=True)
-        
+        st.sidebar.button("💾 Salva Rosa in memoria", on_click=salva_rosa_callback, use_container_width=True)
         if st.session_state["richiesta_salvataggio"]:
-            nomi_da_salvare = ",".join(rosa_utente["Nome"].tolist())
-            cookie_manager.set("algo_custom_rosa", nomi_da_salvare, expires_at=datetime.datetime.now() + datetime.timedelta(days=365))
-            st.sidebar.success("✅ Rosa salvata! Dalla prossima volta si caricherà in automatico.")
+            cookie_manager.set("algo_custom_rosa", ",".join(rosa_utente["Nome"].tolist()), expires_at=datetime.datetime.now() + datetime.timedelta(days=365))
             st.session_state["richiesta_salvataggio"] = False
+            st.rerun()
 
 # Fallback di emergenza
 if rosa_utente.empty:
-    st.info("💡 Nessuna rosa caricata. Visualizzazione della Rosa di Esempio (Demo).")
-    rosa_default = ["Svilar", "Carnesecchi", "Martinez Jo.", "Buongiorno", "Bastoni", "Bremer", "Dimarco", "Di Lorenzo", "Pavard", "Gatti", "Calhanoglu", "Pulisic", "Zaccagni", "Barella", "Pellegrini Lo.", "Loftus-Cheek", "Ederson", "Lautaro", "Vlahovic", "Lookman", "Dybala", "Castellanos", "Pinamonti"]
-    rosa_utente = df_serie_a[df_serie_a["Nome"].isin(rosa_default)].copy()
+    st.info("💡 Nessuna rosa caricata. Visualizzazione della Rosa Demo.")
+    rosa_utente = df_serie_a[df_serie_a["Nome"].isin(["Svilar", "Carnesecchi", "Martinez Jo.", "Buongiorno", "Bastoni", "Bremer", "Dimarco", "Di Lorenzo", "Pavard", "Gatti", "Calhanoglu", "Pulisic", "Zaccagni", "Barella", "Pellegrini Lo.", "Loftus-Cheek", "Ederson", "Lautaro", "Vlahovic", "Lookman", "Dybala", "Castellanos", "Pinamonti"])].copy()
 
 # -----------------------------------------------------------------------------
-# 4. MOTORE DI CALCOLO E GENERAZIONE FORMAZIONE
+# 4. PANNELLO ALLENATORE (SLIDER & INFORTUNATI)
 # -----------------------------------------------------------------------------
-def calcola_indici(df_rosa, mod_attivo, porta_inv):
+st.sidebar.markdown("---")
+st.sidebar.header("🎛️ Pannello Allenatore")
+
+# A) Gestione Infortunati
+indisponibili = st.sidebar.multiselect(
+    "🚑 Giocatori Indisponibili (Esclusi)",
+    options=rosa_utente["Nome"].sort_values().tolist(),
+    help="Seleziona chi è infortunato o squalificato. Verrà ignorato dall'algoritmo."
+)
+
+# B) Slider Personalizzazione Algoritmo
+st.sidebar.markdown("**Bilanciamento Algoritmo**")
+peso_forma = st.sidebar.slider("Peso Storico (Fantamedia)", min_value=0.0, max_value=1.0, value=0.6, step=0.1, help="Più è alto, più l'algoritmo andrà sul sicuro scegliendo i top player. Più è basso, più rischierà in base alla partita facile.")
+peso_match = 1.0 - peso_forma
+
+usa_modificatore = st.sidebar.checkbox("Usa Modificatore Difesa", value=True)
+
+# -----------------------------------------------------------------------------
+# 5. MOTORE DI CALCOLO
+# -----------------------------------------------------------------------------
+def calcola_indici(df_rosa, mod_attivo, p_forma, p_match, indisponibili_list):
     df = df_rosa.copy()
-    cond_mov = df["R"] != "P"
-    df.loc[cond_mov, "Indice_Algo"] = (df["Fm"] * 0.7) + (df["Debolezza_Difesa"] * 0.3) + df["Fattore_Campo"] + df["Bonus_Specialista"]
     
+    # Calcolo Semáforo Difficoltà Matchup (1-10)
+    # Per i giocatori di movimento (Difesa avversaria alta = 🟢)
+    cond_mov = df["R"] != "P"
+    df.loc[cond_mov, "Difficolta_Match"] = df["Debolezza_Difesa"].apply(lambda x: "🟢" if x >= 6.5 else ("🔴" if x <= 3.5 else "🟡"))
+    
+    # Per i portieri (Attacco avversario basso = 🟢)
     cond_por = df["R"] == "P"
-    df.loc[cond_por, "Indice_Algo"] = (df["Fm"] * 0.7) + ((10 - df["Forza_Attacco"]) * 0.3) + df["Fattore_Campo"]
+    df.loc[cond_por, "Difficolta_Match"] = df["Forza_Attacco"].apply(lambda x: "🟢" if x <= 3.5 else ("🔴" if x >= 6.5 else "🟡"))
+
+    # Calcolo Indice Ponderato
+    df.loc[cond_mov, "Indice_Algo"] = (df["Fm"] * p_forma) + (df["Debolezza_Difesa"] * (p_match / 3)) + df["Fattore_Campo"] + df["Bonus_Specialista"]
+    df.loc[cond_por, "Indice_Algo"] = (df["Fm"] * p_forma) + ((10 - df["Forza_Attacco"]) * (p_match / 3)) + df["Fattore_Campo"]
     
     if mod_attivo:
         cond_def = df["R"] == "D"
-        df.loc[cond_def, "Indice_Algo"] = (df["Mv"] * 0.6) + (df["Debolezza_Difesa"] * 0.2) + (df["Fm"] * 0.2) + df["Fattore_Campo"]
+        df.loc[cond_def, "Indice_Algo"] = (df["Mv"] * (p_forma-0.1)) + (df["Debolezza_Difesa"] * (p_match/3)) + (df["Fm"] * 0.2) + df["Fattore_Campo"]
         df.loc[cond_def & (df["Mv"] >= 6.25), "Indice_Algo"] += 0.80
         
     df["Indice_Algo"] = df["Indice_Algo"].round(2)
+    
+    # Applica filtro indisponibili (azzera il punteggio)
+    df.loc[df["Nome"].isin(indisponibili_list), "Indice_Algo"] = -100
+
     return df
 
-df_rosa_calcolata = calcola_indici(rosa_utente, usa_modificatore, bonus_porta_inviolata)
+df_calcolata = calcola_indici(rosa_utente, usa_modificatore, peso_forma, peso_match, indisponibili)
 
-moduli_classic = {
-    "3-4-3": {"D":3,"C":4,"A":3}, "3-5-2": {"D":3,"C":5,"A":2}, 
-    "4-3-3": {"D":4,"C":3,"A":3}, "4-4-2": {"D":4,"C":4,"A":2},
-    "4-5-1": {"D":4,"C":5,"A":1}, "5-3-2": {"D":5,"C":3,"A":2}, 
-    "5-4-1": {"D":5,"C":4,"A":1}
-}
+moduli_classic = {"3-4-3": {"D":3,"C":4,"A":3}, "3-5-2": {"D":3,"C":5,"A":2}, "4-3-3": {"D":4,"C":3,"A":3}, "4-4-2": {"D":4,"C":4,"A":2}}
 
-def genera_formazione(df_calcolato, schema_mod, mod_attivo):
+def genera_formazione(df_calc, schema_mod):
     schema = moduli_classic[schema_mod]
-    p_tit = df_calcolato[df_calcolato["R"] == "P"].sort_values(by="Indice_Algo", ascending=False).head(1)
-    d_tit = df_calcolato[df_calcolato["R"] == "D"].sort_values(by="Indice_Algo", ascending=False).head(schema["D"])
-    c_tit = df_calcolato[df_calcolato["R"] == "C"].sort_values(by="Indice_Algo", ascending=False).head(schema["C"])
-    a_tit = df_calcolato[df_calcolato["R"] == "A"].sort_values(by="Indice_Algo", ascending=False).head(schema["A"])
+    p_tit = df_calc[df_calc["R"] == "P"].sort_values(by="Indice_Algo", ascending=False).head(1)
+    d_tit = df_calc[df_calc["R"] == "D"].sort_values(by="Indice_Algo", ascending=False).head(schema["D"])
+    c_tit = df_calc[df_calc["R"] == "C"].sort_values(by="Indice_Algo", ascending=False).head(schema["C"])
+    a_tit = df_calc[df_calc["R"] == "A"].sort_values(by="Indice_Algo", ascending=False).head(schema["A"])
     
     tit = pd.concat([p_tit, d_tit, c_tit, a_tit])
     pnt = tit["Indice_Algo"].sum()
     
-    esclusi = df_calcolato[~df_calcolato["Id"].isin(tit["Id"])]
+    esclusi = df_calc[~df_calc["Id"].isin(tit["Id"])]
+    # Togliamo gli indisponibili veri dalla panchina visibile
+    pan = esclusi[esclusi["Indice_Algo"] > -50].copy() 
     pan = pd.concat([
-        df_calcolato[(df_calcolato["R"] == "P") & (~df_calcolato["Id"].isin(p_tit["Id"]))],
-        esclusi[esclusi["R"] == "D"].sort_values(by="Indice_Algo", ascending=False),
-        esclusi[esclusi["R"] == "C"].sort_values(by="Indice_Algo", ascending=False),
-        esclusi[esclusi["R"] == "A"].sort_values(by="Indice_Algo", ascending=False)
+        pan[pan["R"] == "P"].sort_values(by="Indice_Algo", ascending=False),
+        pan[pan["R"] == "D"].sort_values(by="Indice_Algo", ascending=False),
+        pan[pan["R"] == "C"].sort_values(by="Indice_Algo", ascending=False),
+        pan[pan["R"] == "A"].sort_values(by="Indice_Algo", ascending=False)
     ])
     
     switches = []
@@ -284,37 +253,56 @@ def genera_formazione(df_calcolato, schema_mod, mod_attivo):
         p_pan = pan[pan["R"] == r].sort_values(by="Indice_Algo", ascending=False)
         if not u_tit.empty and not p_pan.empty:
             if (u_tit.iloc[0]["Indice_Algo"] - p_pan.iloc[0]["Indice_Algo"]) <= 0.35:
-                switches.append(f"🔄 **{r}**: {u_tit.iloc[0]['Nome']} ({u_tit.iloc[0]['Indice_Algo']}) vs {p_pan.iloc[0]['Nome']} ({p_pan.iloc[0]['Indice_Algo']})")
+                switches.append(f"🔄 **{r}**: {u_tit.iloc[0]['Nome']} ({u_tit.iloc[0]['Difficolta_Match']}) vs {p_pan.iloc[0]['Nome']} ({p_pan.iloc[0]['Difficolta_Match']})")
     return pnt.round(2), tit, pan, switches
 
-miglior_mod = max(moduli_classic.keys(), key=lambda m: genera_formazione(df_rosa_calcolata, m, usa_modificatore)[0])
+miglior_mod = max(moduli_classic.keys(), key=lambda m: genera_formazione(df_calcolata, m)[0])
 
 # -----------------------------------------------------------------------------
-# 5. OUTPUT E VISUALIZZAZIONE
+# 6. OUTPUT PREMIUM (IL CAMPO VIRTUALE)
 # -----------------------------------------------------------------------------
 st.markdown("---")
-col_mod, col_info = st.columns([2, 1])
-with col_mod:
-    modulo_selezionato = st.selectbox(
-        "Seleziona Modulo Tattico", 
-        list(moduli_classic.keys()), 
-        index=list(moduli_classic.keys()).index(miglior_mod)
-    )
-    if modulo_selezionato == miglior_mod:
-        st.caption(f"⭐ **Modulo consigliato da Algo-Custom**")
+modulo_selezionato = st.selectbox("Seleziona Modulo Tattico", list(moduli_classic.keys()), index=list(moduli_classic.keys()).index(miglior_mod))
+_, df_titolari, df_panchina, lista_switches = genera_formazione(df_calcolata, modulo_selezionato)
 
-pnt_totale, df_titolari, df_panchina, lista_switches = genera_formazione(df_rosa_calcolata, modulo_selezionato, usa_modificatore)
+# Funzione per disegnare la singola Card del giocatore
+def draw_card(row):
+    color = "#1e1e1e" # Sfondo scuro premium
+    border = "2px solid #333"
+    html = f"""
+    <div style="background-color: {color}; border: {border}; border-radius: 8px; padding: 10px; text-align: center; margin-bottom: 10px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);">
+        <h4 style="margin:0; padding:0; font-size:16px; color:white;">{row['Nome']}</h4>
+        <p style="margin:5px 0 0 0; font-size:12px; color:#bbb;">{row['Squadra']} vs {row['Prossimo_Avversario']} {row['Difficolta_Match']}</p>
+        <div style="margin-top:5px; font-weight:bold; color:#4da6ff;">⭐ {row['Indice_Algo']}</div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
 
-col_tit, col_pan = st.columns(2)
-with col_tit:
-    st.subheader("🟢 11 Titolari")
-    st.dataframe(df_titolari[["R", "Nome", "Squadra", "Prossimo_Avversario", "Indice_Algo"]], use_container_width=True, hide_index=True)
+st.subheader("🟢 Formazione Titolare (Il Campo)")
+st.caption("Legenda Match: 🟢 Facile | 🟡 Medio | 🔴 Difficile")
 
-with col_pan:
+# Disegna il campo dall'Attacco alla Difesa
+ruoli_ordine = [("A", "Attacco"), ("C", "Centrocampo"), ("D", "Difesa"), ("P", "Porta")]
+
+for sigla, nome_ruolo in ruoli_ordine:
+    giocatori_ruolo = df_titolari[df_titolari["R"] == sigla]
+    if not giocatori_ruolo.empty:
+        st.markdown(f"<h5 style='text-align: center; color: #888;'>{nome_ruolo}</h5>", unsafe_allow_html=True)
+        cols = st.columns(len(giocatori_ruolo))
+        for i, (_, player) in enumerate(giocatori_ruolo.iterrows()):
+            with cols[i]:
+                draw_card(player)
+
+st.markdown("---")
+col_panchina, col_alert = st.columns([1.5, 1])
+
+with col_panchina:
     st.subheader("🟡 Panchina")
-    st.dataframe(df_panchina[["R", "Nome", "Squadra", "Prossimo_Avversario", "Indice_Algo"]], use_container_width=True, hide_index=True)
+    st.dataframe(df_panchina[["R", "Nome", "Squadra", "Prossimo_Avversario", "Difficolta_Match", "Indice_Algo"]], hide_index=True, use_container_width=True)
 
-if lista_switches:
-    st.warning("⚠️ **Ballottaggi / Switch Caldi Rilevati (Differenza indice minima):**")
-    for sw in lista_switches: 
-        st.markdown(f"- {sw}")
+with col_alert:
+    if indisponibili:
+        st.error(f"🚑 **Indisponibili Esclusi:**\n\n" + ", ".join(indisponibili))
+    if lista_switches:
+        st.warning("⚠️ **Ballottaggi Caldi:**")
+        for sw in lista_switches: st.markdown(f"- {sw}")
