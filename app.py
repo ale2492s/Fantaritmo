@@ -79,27 +79,34 @@ st.sidebar.header("📥 Gestione Rosa")
 
 cookie_manager = stx.CookieManager(key="cookie_manager")
 
-# Callbacks per gestire i click dei pulsanti senza bug
-def rimuovi_rosa_callback():
-    st.session_state["svuota_memoria"] = True
-
-def salva_rosa_callback():
-    st.session_state["richiesta_salvataggio"] = True
-
+# Inizializzazione degli stati di sessione per gestire i bottoni
+if "ignora_cookie" not in st.session_state:
+    st.session_state["ignora_cookie"] = False
 if "svuota_memoria" not in st.session_state:
     st.session_state["svuota_memoria"] = False
-    
 if "richiesta_salvataggio" not in st.session_state:
     st.session_state["richiesta_salvataggio"] = False
 
-# Lettura della rosa salvata
+# Callbacks
+def rimuovi_rosa_callback():
+    st.session_state["svuota_memoria"] = True
+    st.session_state["ignora_cookie"] = True
+
+def salva_rosa_callback():
+    st.session_state["richiesta_salvataggio"] = True
+    st.session_state["ignora_cookie"] = False
+
+# 1. Legge il cookie attuale dal browser
 rosa_salvata_str = cookie_manager.get(cookie="algo_custom_rosa")
 
-# Esecuzione eliminazione se richiesta
+# 2. Se è stata richiesta l'eliminazione, manda il comando al browser
 if st.session_state["svuota_memoria"]:
     cookie_manager.delete("algo_custom_rosa")
-    rosa_salvata_str = None
     st.session_state["svuota_memoria"] = False
+
+# 3. TRUCCO: Ignora forzatamente il cookie appena eliminato
+if st.session_state["ignora_cookie"]:
+    rosa_salvata_str = None
 
 rosa_utente = pd.DataFrame()
 usa_modificatore = True
@@ -114,7 +121,7 @@ if rosa_salvata_str:
     st.sidebar.markdown("---")
     usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa", value=True)
     
-    st.sidebar.button("🗑️ Rimuovi Rosa (Inserisci Nuova)", on_click=rimuovi_rosa_callback, use_container_width=True)
+    st.sidebar.button("🗑️ Rimuovi Rosa", on_click=rimuovi_rosa_callback, use_container_width=True)
 
 # SCENARIO B: NESSUNA ROSA SALVATA -> MOSTRA OPZIONI
 else:
@@ -123,6 +130,7 @@ else:
         ["📸 Scansiona Screenshot OCR", "🔍 Ricerca Nome Lega", "✏️ Incolla Nomi", "📁 File CSV/Excel"]
     )
 
+    # --- METODO 1: OCR MULTISCREEN (CON BLACKLIST E 90% DI PRECISIONE) ---
     if metodo_rosa == "📸 Scansiona Screenshot OCR":
         st.sidebar.markdown("---")
         usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa", value=True)
@@ -131,26 +139,44 @@ else:
         uploaded_imgs = st.sidebar.file_uploader("Carica Screenshot", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
         
         if uploaded_imgs:
-            with st.spinner("🧠 Intelligenza Artificiale in lettura..."):
+            with st.spinner("🧠 Intelligenza Artificiale in lettura. Filtro precisione attivato..."):
                 testo_grezzo_totale = ""
                 for uploaded_img in uploaded_imgs:
                     img = Image.open(uploaded_img)
                     testo_grezzo_totale += pytesseract.image_to_string(img) + "\n"
                 
-                righe = [r.strip() for r in testo_grezzo_totale.split('\n') if len(r.strip()) > 2]
+                # 1. Elimina le righe troppo corte
+                righe = [r.strip() for r in testo_grezzo_totale.split('\n') if len(r.strip()) > 3]
                 nomi_db = df_serie_a["Nome"].tolist()
+                
+                # 2. Blacklist: parole e squadre dell'app Fantacalcio da ignorare
+                squadre_db = [str(s).lower() for s in df_serie_a["Squadra"].unique()]
+                blacklist = ["por", "dif", "cen", "att", "portieri", "difensori", "centrocampisti", "attaccanti", 
+                             "voto", "media", "fantamedia", "quotazione", "svincola", "giocatore", "ruolo"] + squadre_db
                 
                 giocatori_trovati = []
                 for riga in righe:
+                    riga_lower = riga.lower()
+                    parole_riga = riga_lower.split()
+                    
+                    # Se la riga contiene esattamente una parola della blacklist, la saltiamo
+                    if any(parola_black in parole_riga for parola_black in blacklist):
+                        continue
+                        
                     risultato = process.extractOne(riga, nomi_db)
                     if risultato:
                         match, score = risultato
-                        if score >= 80:
+                        # 3. SOGLIA AL 90% (Scarta i "falsi positivi")
+                        if score >= 90:
                             giocatori_trovati.append(match)
                 
                 giocatori_unici = list(set(giocatori_trovati))
                 rosa_utente = df_serie_a[df_serie_a["Nome"].isin(giocatori_unici)].copy()
-                st.sidebar.success(f"Scansione completata! Trovati {len(rosa_utente)} giocatori.")
+                
+                if len(rosa_utente) > 0:
+                    st.sidebar.success(f"Scansione completata! Trovati {len(rosa_utente)} giocatori.")
+                else:
+                    st.sidebar.error("Non sono riuscito a leggere bene i nomi. Riprova con screen più nitidi.")
 
     elif metodo_rosa == "🔍 Ricerca Nome Lega":
         st.sidebar.markdown("---")
