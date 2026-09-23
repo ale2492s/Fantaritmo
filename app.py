@@ -331,13 +331,8 @@ for sigla, _ in ruoli_ordine:
         html_pitch += '<div class="row-line">'
         for _, player in giocatori_ruolo.iterrows():
             semaforo = player['Difficolta_Match']
-            html_pitch += f"""
-            <div class="player-card">
-                <div class="player-name">{player['Nome']}</div>
-                <div class="player-stats">{player['Prossimo_Avversario']} {semaforo}</div>
-                <div class="player-rating">⭐ {player['Indice_Algo']}</div>
-            </div>
-            """
+            # Tutto in una riga senza rientri per evitare che Streamlit lo legga come "codice sorgente"
+            html_pitch += f'<div class="player-card"><div class="player-name">{player["Nome"]}</div><div class="player-stats">{player["Prossimo_Avversario"]} {semaforo}</div><div class="player-rating">⭐ {player["Indice_Algo"]}</div></div>'
         html_pitch += '</div>'
 html_pitch += '</div>'
 
