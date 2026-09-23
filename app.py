@@ -24,12 +24,13 @@ st.title("⚽ Algo-Custom: Formazione Premium")
 st.caption("Intelligenza Artificiale, Controllo Totale e Analisi Matchup")
 
 # -----------------------------------------------------------------------------
-# 2. CARICAMENTO DATABASE SERIE A
+# 2. CARICAMENTO DATABASE SERIE A (PREPARAZIONE PER API FUTURE)
 # -----------------------------------------------------------------------------
 @st.cache_data
 def load_database():
     df = pd.read_excel('statistiche.csv', header=1)
     
+    # [FUTURE UPDATE]: Qui inseriremo la chiamata API per aggiornare il calendario in tempo reale
     calendario = {
         "Monza": "Sassuolo", "Sassuolo": "Monza", "Bologna": "Torino", "Torino": "Bologna",
         "Udinese": "Cagliari", "Cagliari": "Udinese", "Roma": "Inter", "Inter": "Roma",
@@ -44,7 +45,6 @@ def load_database():
     df["Fattore_Campo"] = df["Squadra"].apply(lambda x: 0.5 if x in squadre_in_casa else 0.0)
     df["Bonus_Specialista"] = df["Nome"].apply(lambda x: 1.0 if x in rigoristi else 0.0)
 
-    # Scala da 1 a 10 per la forza delle squadre
     stat = df.groupby('Squadra').agg({'Gf': 'sum', 'Gs': 'sum'})
     min_gf, max_gf = stat['Gf'].min(), stat['Gf'].max()
     min_gs, max_gs = stat['Gs'].min(), stat['Gs'].max()
@@ -106,19 +106,13 @@ if st.session_state["ignora_cookie"]:
 
 rosa_utente = pd.DataFrame()
 
-# SCENARIO A: ROSA GIÀ SALVATA
 if rosa_salvata_str:
     nomi_salvati = rosa_salvata_str.split(",")
     rosa_utente = df_serie_a[df_serie_a["Nome"].isin(nomi_salvati)].copy()
     st.sidebar.success(f"✅ Trovati {len(rosa_utente)} giocatori in memoria!")
     st.sidebar.button("🔄 Cambia/Rimuovi Rosa", on_click=rimuovi_rosa_callback, use_container_width=True)
-
-# SCENARIO B: NESSUNA ROSA SALVATA -> MOSTRA OPZIONI
 else:
-    metodo_rosa = st.sidebar.radio(
-        "Importa la tua squadra:",
-        ["📸 OCR (Screenshot)", "🔍 Ricerca Lega", "✏️ Testo", "📁 CSV/Excel"]
-    )
+    metodo_rosa = st.sidebar.radio("Importa la tua squadra:", ["📸 OCR (Screenshot)", "🔍 Ricerca Lega", "✏️ Testo", "📁 CSV/Excel"])
 
     if metodo_rosa == "📸 OCR (Screenshot)":
         uploaded_imgs = st.sidebar.file_uploader("Carica 2-3 Screenshot", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key=f"ocr_{st.session_state['widget_key']}")
@@ -167,7 +161,6 @@ else:
             st.session_state["richiesta_salvataggio"] = False
             st.rerun()
 
-# Fallback di emergenza
 if rosa_utente.empty:
     st.info("💡 Nessuna rosa caricata. Visualizzazione della Rosa Demo.")
     rosa_utente = df_serie_a[df_serie_a["Nome"].isin(["Svilar", "Carnesecchi", "Martinez Jo.", "Buongiorno", "Bastoni", "Bremer", "Dimarco", "Di Lorenzo", "Pavard", "Gatti", "Calhanoglu", "Pulisic", "Zaccagni", "Barella", "Pellegrini Lo.", "Loftus-Cheek", "Ederson", "Lautaro", "Vlahovic", "Lookman", "Dybala", "Castellanos", "Pinamonti"])].copy()
@@ -178,18 +171,16 @@ if rosa_utente.empty:
 st.sidebar.markdown("---")
 st.sidebar.header("🎛️ Pannello Allenatore")
 
-# A) Gestione Infortunati
+# [FUTURE UPDATE]: Questo multiselect verrà riempito automaticamente dalle API
 indisponibili = st.sidebar.multiselect(
     "🚑 Giocatori Indisponibili (Esclusi)",
     options=rosa_utente["Nome"].sort_values().tolist(),
-    help="Seleziona chi è infortunato o squalificato. Verrà ignorato dall'algoritmo."
+    help="Seleziona chi è infortunato o squalificato. Verrà ignorato dall'algoritmo. In futuro questo dato sarà automatico."
 )
 
-# B) Slider Personalizzazione Algoritmo
 st.sidebar.markdown("**Bilanciamento Algoritmo**")
-peso_forma = st.sidebar.slider("Peso Storico (Fantamedia)", min_value=0.0, max_value=1.0, value=0.6, step=0.1, help="Più è alto, più l'algoritmo andrà sul sicuro scegliendo i top player. Più è basso, più rischierà in base alla partita facile.")
+peso_forma = st.sidebar.slider("Peso Storico (Fantamedia)", min_value=0.0, max_value=1.0, value=0.6, step=0.1)
 peso_match = 1.0 - peso_forma
-
 usa_modificatore = st.sidebar.checkbox("Usa Modificatore Difesa", value=True)
 
 # -----------------------------------------------------------------------------
@@ -197,17 +188,11 @@ usa_modificatore = st.sidebar.checkbox("Usa Modificatore Difesa", value=True)
 # -----------------------------------------------------------------------------
 def calcola_indici(df_rosa, mod_attivo, p_forma, p_match, indisponibili_list):
     df = df_rosa.copy()
-    
-    # Calcolo Semáforo Difficoltà Matchup (1-10)
-    # Per i giocatori di movimento (Difesa avversaria alta = 🟢)
     cond_mov = df["R"] != "P"
     df.loc[cond_mov, "Difficolta_Match"] = df["Debolezza_Difesa"].apply(lambda x: "🟢" if x >= 6.5 else ("🔴" if x <= 3.5 else "🟡"))
-    
-    # Per i portieri (Attacco avversario basso = 🟢)
     cond_por = df["R"] == "P"
     df.loc[cond_por, "Difficolta_Match"] = df["Forza_Attacco"].apply(lambda x: "🟢" if x <= 3.5 else ("🔴" if x >= 6.5 else "🟡"))
 
-    # Calcolo Indice Ponderato
     df.loc[cond_mov, "Indice_Algo"] = (df["Fm"] * p_forma) + (df["Debolezza_Difesa"] * (p_match / 3)) + df["Fattore_Campo"] + df["Bonus_Specialista"]
     df.loc[cond_por, "Indice_Algo"] = (df["Fm"] * p_forma) + ((10 - df["Forza_Attacco"]) * (p_match / 3)) + df["Fattore_Campo"]
     
@@ -217,10 +202,7 @@ def calcola_indici(df_rosa, mod_attivo, p_forma, p_match, indisponibili_list):
         df.loc[cond_def & (df["Mv"] >= 6.25), "Indice_Algo"] += 0.80
         
     df["Indice_Algo"] = df["Indice_Algo"].round(2)
-    
-    # Applica filtro indisponibili (azzera il punteggio)
     df.loc[df["Nome"].isin(indisponibili_list), "Indice_Algo"] = -100
-
     return df
 
 df_calcolata = calcola_indici(rosa_utente, usa_modificatore, peso_forma, peso_match, indisponibili)
@@ -238,7 +220,6 @@ def genera_formazione(df_calc, schema_mod):
     pnt = tit["Indice_Algo"].sum()
     
     esclusi = df_calc[~df_calc["Id"].isin(tit["Id"])]
-    # Togliamo gli indisponibili veri dalla panchina visibile
     pan = esclusi[esclusi["Indice_Algo"] > -50].copy() 
     pan = pd.concat([
         pan[pan["R"] == "P"].sort_values(by="Indice_Algo", ascending=False),
@@ -259,45 +240,115 @@ def genera_formazione(df_calc, schema_mod):
 miglior_mod = max(moduli_classic.keys(), key=lambda m: genera_formazione(df_calcolata, m)[0])
 
 # -----------------------------------------------------------------------------
-# 6. OUTPUT PREMIUM (IL CAMPO VIRTUALE)
+# 6. OUTPUT PREMIUM: IL CAMPO STILE SKY (HTML/CSS)
 # -----------------------------------------------------------------------------
 st.markdown("---")
 modulo_selezionato = st.selectbox("Seleziona Modulo Tattico", list(moduli_classic.keys()), index=list(moduli_classic.keys()).index(miglior_mod))
 _, df_titolari, df_panchina, lista_switches = genera_formazione(df_calcolata, modulo_selezionato)
 
-# Funzione per disegnare la singola Card del giocatore
-def draw_card(row):
-    color = "#1e1e1e" # Sfondo scuro premium
-    border = "2px solid #333"
-    html = f"""
-    <div style="background-color: {color}; border: {border}; border-radius: 8px; padding: 10px; text-align: center; margin-bottom: 10px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);">
-        <h4 style="margin:0; padding:0; font-size:16px; color:white;">{row['Nome']}</h4>
-        <p style="margin:5px 0 0 0; font-size:12px; color:#bbb;">{row['Squadra']} vs {row['Prossimo_Avversario']} {row['Difficolta_Match']}</p>
-        <div style="margin-top:5px; font-weight:bold; color:#4da6ff;">⭐ {row['Indice_Algo']}</div>
-    </div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
+st.subheader(f"🏟️ Formazione Titolare ({modulo_selezionato})")
 
-st.subheader("🟢 Formazione Titolare (Il Campo)")
-st.caption("Legenda Match: 🟢 Facile | 🟡 Medio | 🔴 Difficile")
+# Costruzione del CSS per il campo da calcio
+campo_css = """
+<style>
+.pitch-container {
+    background: linear-gradient(0deg, #2b611e 0%, #3e882a 50%, #2b611e 100%);
+    border: 4px solid white;
+    border-radius: 10px;
+    padding: 20px 0;
+    position: relative;
+    width: 100%;
+    max-width: 700px;
+    margin: 0 auto;
+    box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+    background-size: 100% 50px;
+    background-image: repeating-linear-gradient(0deg, transparent, transparent 48px, rgba(255,255,255,0.05) 48px, rgba(255,255,255,0.05) 50px);
+}
+.pitch-line {
+    border-bottom: 2px solid rgba(255,255,255,0.3);
+    position: absolute;
+    top: 50%;
+    width: 100%;
+}
+.pitch-circle {
+    border: 2px solid rgba(255,255,255,0.3);
+    border-radius: 50%;
+    width: 100px;
+    height: 100px;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+.row-line {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    margin: 20px 0;
+    z-index: 2;
+    position: relative;
+}
+.player-card {
+    background-color: rgba(20, 20, 20, 0.9);
+    border: 1px solid #4da6ff;
+    border-radius: 6px;
+    color: white;
+    padding: 8px 5px;
+    width: 100px;
+    text-align: center;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.4);
+    backdrop-filter: blur(4px);
+}
+.player-name {
+    font-size: 12px;
+    font-weight: bold;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 3px;
+}
+.player-stats {
+    font-size: 10px;
+    color: #ccc;
+}
+.player-rating {
+    font-size: 12px;
+    font-weight: bold;
+    color: #ffcc00;
+    margin-top: 3px;
+}
+</style>
+"""
+st.markdown(campo_css, unsafe_allow_html=True)
 
-# Disegna il campo dall'Attacco alla Difesa
+# Creazione della struttura HTML del campo
+html_pitch = '<div class="pitch-container"><div class="pitch-line"></div><div class="pitch-circle"></div>'
+
 ruoli_ordine = [("A", "Attacco"), ("C", "Centrocampo"), ("D", "Difesa"), ("P", "Porta")]
-
-for sigla, nome_ruolo in ruoli_ordine:
+for sigla, _ in ruoli_ordine:
     giocatori_ruolo = df_titolari[df_titolari["R"] == sigla]
     if not giocatori_ruolo.empty:
-        st.markdown(f"<h5 style='text-align: center; color: #888;'>{nome_ruolo}</h5>", unsafe_allow_html=True)
-        cols = st.columns(len(giocatori_ruolo))
-        for i, (_, player) in enumerate(giocatori_ruolo.iterrows()):
-            with cols[i]:
-                draw_card(player)
+        html_pitch += '<div class="row-line">'
+        for _, player in giocatori_ruolo.iterrows():
+            semaforo = player['Difficolta_Match']
+            html_pitch += f"""
+            <div class="player-card">
+                <div class="player-name">{player['Nome']}</div>
+                <div class="player-stats">{player['Prossimo_Avversario']} {semaforo}</div>
+                <div class="player-rating">⭐ {player['Indice_Algo']}</div>
+            </div>
+            """
+        html_pitch += '</div>'
+html_pitch += '</div>'
 
-st.markdown("---")
+# Disegna il campo nell'app
+st.markdown(html_pitch, unsafe_allow_html=True)
+
+st.markdown("<br><hr>", unsafe_allow_html=True)
 col_panchina, col_alert = st.columns([1.5, 1])
 
 with col_panchina:
-    st.subheader("🟡 Panchina")
+    st.subheader("🟡 Panchina (Ordine di Inserimento)")
     st.dataframe(df_panchina[["R", "Nome", "Squadra", "Prossimo_Avversario", "Difficolta_Match", "Indice_Algo"]], hide_index=True, use_container_width=True)
 
 with col_alert:
