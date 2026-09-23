@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+from bs4 import BeautifulSoup
+import re
 
 # -----------------------------------------------------------------------------
 # 1. CONFIGURAZIONE PAGINA STREAMLIT
@@ -52,94 +54,120 @@ except Exception as e:
     st.stop()
 
 # -----------------------------------------------------------------------------
-# 3. SIDEBAR: REGOLAMENTO LEGA & LOGIN FANTACALCIO.IT
+# 3. SCRAPING ED ESTRAZIONE SMART (NOME LEGA + SQUADRA)
 # -----------------------------------------------------------------------------
-st.sidebar.header("⚙️ Impostazioni Lega")
-modalita = st.sidebar.selectbox("Modalità di Gioco", ["Classic", "Mantra (In arrivo)"])
-usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa Attivo", value=True)
-bonus_porta_inviolata = st.sidebar.checkbox("Bonus Porta Inviolata (+1)", value=False)
+def cerca_lega_e_dettagli(nome_lega, nome_squadra, df_database):
+    slug_lega = re.sub(r'[^a-zA-Z0-9\s]', '', nome_lega).strip().lower().replace(' ', '-')
+    url_rose = f"https://leghe.fantacalcio.it/{slug_lega}/rose"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    
+    try:
+        res = requests.get(url_rose, headers=headers, timeout=8)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            
+            giocatori_trovati = []
+            for el in soup.find_all(text=True):
+                pulito = el.strip()
+                if pulito in df_database["Nome"].values:
+                    giocatori_trovati.append(pulito)
+            
+            giocatori_unici = list(set(giocatori_trovati))
+            rosa = df_database[df_database["Nome"].isin(giocatori_unici)].copy()
+            
+            if not rosa.empty:
+                return {
+                    "esito": True,
+                    "url": url_rose,
+                    "rosa": rosa,
+                    "num_giocatori": len(rosa)
+                }
+    except Exception:
+        pass
+        
+    return {"esito": False}
 
-st.sidebar.markdown("---")
-st.sidebar.header("🔑 Account Fantacalcio.it")
+# -----------------------------------------------------------------------------
+# 4. SIDEBAR: SELEZIONE MODALITÀ DI IMPORTAZIONE (TRIPLA SOLUZIONE)
+# -----------------------------------------------------------------------------
+st.sidebar.header("📥 Caricamento Rosa Utente")
 
 metodo_rosa = st.sidebar.radio(
-    "Metodo di caricamento rosa:",
-    ["Login Diretto API", "Carica File CSV/Excel", "Incolla Nomi Manualmente"]
+    "Scegli la modalità:",
+    ["🔍 Ricerca Nome Lega & Squadra (2 Step)", "✏️ Incolla Nomi Manualmente", "📁 Carica File CSV/Excel"]
 )
 
 rosa_utente = pd.DataFrame()
+usa_modificatore = True
+bonus_porta_inviolata = False
+modalita_gioco = "Classic"
 
-# -----------------------------------------------------------------------------
-# 4. LOGICA DI AUTENTICAZIONE E DOWNLOAD AUTOMATICO ROSA
-# -----------------------------------------------------------------------------
-def autentica_fanta(username, password):
-    session = requests.Session()
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Content-Type": "application/json"
-    }
-    # Endpoint autenticazione API Fantacalcio.it
-    url_login = "https://api.fantacalcio.it/v1/user/login"
-    payload = {"username": username, "password": password}
+# --- OPZIONE 1: RICERCA LEGA & SQUADRA (2 STEP) ---
+if metodo_rosa == "🔍 Ricerca Nome Lega & Squadra (2 Step)":
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Step 1: Inserisci Dati")
     
-    try:
-        res = session.post(url_login, json=payload, headers=headers, timeout=8)
-        if res.status_code == 200:
-            data = res.json()
-            return data.get("token"), session
-        else:
-            return None, None
-    except Exception:
-        return None, None
+    if "step_ricerca" not in st.session_state:
+        st.session_state["step_ricerca"] = 1
 
-def ottieni_rosa_api(token, session):
-    headers = {"Authorization": f"Bearer {token}"}
-    # Query endpoint rose utente
-    url_rose = "https://api.fantacalcio.it/v1/user/leagues"
-    try:
-        res = session.get(url_rose, headers=headers, timeout=8)
-        if res.status_code == 200:
-            data = res.json()
-            # Estrazione ID dei giocatori della lega attiva
-            giocatori_ids = []
-            if "leagues" in data and len(data["leagues"]) > 0:
-                for player in data["leagues"][0].get("roster", []):
-                    giocatori_ids.append(player.get("id"))
-            return giocatori_ids
-    except Exception:
-        pass
-    return []
-
-if metodo_rosa == "Login Diretto API":
-    with st.sidebar.form("form_fanta_login"):
-        fanta_user = st.text_input("Username o Email")
-        fanta_pass = st.text_input("Password", type="password")
-        btn_connetti = st.form_submit_button("Accedi e Scarica Rosa")
-
-    if btn_connetti:
-        if fanta_user and fanta_pass:
-            with st.spinner("Connessione ai server di Fantacalcio.it in corso..."):
-                token, sess = autentica_fanta(fanta_user, fanta_pass)
-                if token:
-                    ids_rosa = ottieni_rosa_api(token, sess)
-                    if ids_rosa:
-                        rosa_utente = df_serie_a[df_serie_a["Id"].isin(ids_rosa)].copy()
-                        st.session_state["rosa_salvata"] = rosa_utente
-                        st.sidebar.success(f"Trovati {len(rosa_utente)} giocatori nella tua rosa!")
-                    else:
-                        st.sidebar.warning("Login riuscito! Inserisci la tua rosa da File/Testo se la lega non è pubblica.")
+    if st.session_state["step_ricerca"] == 1:
+        with st.sidebar.form("form_ricerca_lega"):
+            input_lega = st.text_input("Nome della tua Lega", placeholder="Es. FantaAmici")
+            input_squadra = st.text_input("Nome della tua Squadra", placeholder="Es. FC Milano")
+            btn_cerca = st.form_submit_button("Trova la mia Lega")
+            
+        if btn_cerca and input_lega and input_squadra:
+            with st.spinner("Ricerca lega in corso..."):
+                risultato = cerca_lega_e_dettagli(input_lega, input_squadra, df_serie_a)
+                if risultato["esito"]:
+                    st.session_state["dati_trovati"] = risultato
+                    st.session_state["step_ricerca"] = 2
+                    st.rerun()
                 else:
-                    st.sidebar.error("Credenziali non valide o blocco API temporaneo.")
-        else:
-            st.sidebar.warning("Compila entrambi i campi.")
+                    st.sidebar.error("Lega non trovata o impostata su Privata. Prova l'incollaggio manuale o il file CSV!")
 
-    if "rosa_salvata" in st.session_state and rosa_utente.empty:
-        rosa_utente = st.session_state["rosa_salvata"]
+    elif st.session_state["step_ricerca"] == 2:
+        dati = st.session_state["dati_trovati"]
+        st.sidebar.success("✅ Lega e Rosa individuate!")
+        st.sidebar.info(f"Giocatori estratti: **{dati['num_giocatori']}**")
+        
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("Step 2: Regolamento Lega")
+        modalita_gioco = st.sidebar.selectbox("Modalità di Gioco", ["Classic", "Mantra (In arrivo)"])
+        num_partecipanti = st.sidebar.number_input("Numero Partecipanti Lega", min_value=4, max_value=20, value=10)
+        crediti_asta = st.sidebar.number_input("Crediti Iniziali Asta", min_value=100, max_value=1000, value=500, step=50)
+        usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa Attivo", value=True)
+        bonus_porta_inviolata = st.sidebar.checkbox("Bonus Porta Inviolata (+1)", value=False)
+        
+        rosa_utente = dati["rosa"]
+        
+        if st.sidebar.button("🔄 Cambia Lega / Nuova Ricerca"):
+            st.session_state["step_ricerca"] = 1
+            st.rerun()
 
-# -----------------------------------------------------------------------------
-# 5. FALLBACK: FILE UPLOADER & TEXT AREA
-# -----------------------------------------------------------------------------
-if metodo_rosa == "Carica File CSV/Excel":
+# --- OPZIONE 2: INCOLLA NOMI MANUALMENTE ---
+elif metodo_rosa == "✏️ Incolla Nomi Manualmente":
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("⚙️ Impostazioni Lega")
+    modalita_gioco = st.sidebar.selectbox("Modalità di Gioco", ["Classic", "Mantra (In arrivo)"])
+    usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa Attivo", value=True)
+    bonus_porta_inviolata = st.sidebar.checkbox("Bonus Porta Inviolata (+1)", value=False)
+    
+    st.subheader("✏️ Inserimento Manuale Rosa")
+    testo = st.text_area("Incolla i nomi dei tuoi giocatori separati da una virgola:", placeholder="Es: Svilar, Carnesecchi, Bastoni, Bremer, Dimarco, Calhanoglu, Lautaro...")
+    if testo:
+        nomi = [n.strip() for n in testo.split(',') if n.strip()]
+        rosa_utente = df_serie_a[df_serie_a["Nome"].isin(nomi)].copy()
+        st.success(f"Rosa riconosciuta! Trovati {len(rosa_utente)} giocatori su {len(nomi)} inseriti.")
+
+# --- OPZIONE 3: CARICA FILE CSV / EXCEL ---
+elif metodo_rosa == "📁 Carica File CSV/Excel":
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("⚙️ Impostazioni Lega")
+    modalita_gioco = st.sidebar.selectbox("Modalità di Gioco", ["Classic", "Mantra (In arrivo)"])
+    usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa Attivo", value=True)
+    bonus_porta_inviolata = st.sidebar.checkbox("Bonus Porta Inviolata (+1)", value=False)
+    
     st.subheader("📁 Carica File Rosa")
     uploaded_file = st.file_uploader("Trascina qui il file scaricato da Fantacalcio.it", type=["xlsx", "csv"])
     if uploaded_file is not None:
@@ -149,20 +177,13 @@ if metodo_rosa == "Carica File CSV/Excel":
             if col_nome:
                 nomi = df_user[col_nome[0]].dropna().unique()
                 rosa_utente = df_serie_a[df_serie_a["Nome"].isin(nomi)].copy()
-                st.success(f"Rosa riconosciuta! {len(rosa_utente)} giocatori attivi.")
+                st.success(f"Rosa caricata con successo! Trovati {len(rosa_utente)} giocatori.")
         except Exception as e:
-            st.error(f"Errore lettura file: {e}")
+            st.error(f"Errore nella lettura del file: {e}")
 
-elif metodo_rosa == "Incolla Nomi Manualmente":
-    st.subheader("✏️ Inserimento Manuale")
-    testo = st.text_area("Incolla i nomi dei tuoi giocatori separati da una virgola:")
-    if testo:
-        nomi = [n.strip() for n in testo.split(',') if n.strip()]
-        rosa_utente = df_serie_a[df_serie_a["Nome"].isin(nomi)].copy()
-
-# Rosa di default se nessuna rosa è selezionata
+# Fallback di test se nessuna rosa è ancora caricata
 if rosa_utente.empty:
-    st.info("💡 Nessuna rosa collegata. Visualizzazione della Rosa di Esempio.")
+    st.info("💡 Nessuna rosa selezionata. Visualizzazione della Rosa di Esempio.")
     rosa_default = [
         "Svilar", "Carnesecchi", "Martinez Jo.",
         "Buongiorno", "Bastoni", "Bremer", "Dimarco", "Di Lorenzo", "Pavard", "Gatti",
@@ -172,7 +193,7 @@ if rosa_utente.empty:
     rosa_utente = df_serie_a[df_serie_a["Nome"].isin(rosa_default)].copy()
 
 # -----------------------------------------------------------------------------
-# 6. MOTORE ALGORITMICO E GENERAZIONE FORMAZIONE
+# 5. MOTORE DI CALCOLO E GENERAZIONE FORMAZIONE
 # -----------------------------------------------------------------------------
 def calcola_indici(df_rosa, mod_attivo, porta_inv):
     df = df_rosa.copy()
@@ -241,7 +262,6 @@ def genera_formazione(df_calcolato, schema_mod, mod_attivo):
 
     return pnt.round(2), tit, pan, switches
 
-# Identificazione Modulo Migliore
 miglior_mod = None
 pnt_max = -1
 for m in moduli_classic:
@@ -251,7 +271,7 @@ for m in moduli_classic:
         miglior_mod = m
 
 # -----------------------------------------------------------------------------
-# 7. VISUALIZZAZIONE TABELLE E SWITCH
+# 6. OUTPUT E VISUALIZZAZIONE
 # -----------------------------------------------------------------------------
 st.markdown("---")
 col_mod, col_info = st.columns([2, 1])
