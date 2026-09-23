@@ -79,9 +79,11 @@ st.sidebar.header("📥 Gestione Rosa")
 cookie_manager = stx.CookieManager()
 rosa_salvata_str = cookie_manager.get(cookie="algo_custom_rosa")
 rosa_utente = pd.DataFrame()
+
 usa_modificatore = True
 bonus_porta_inviolata = False
 
+# SCENARIO A: ROSA GIÀ SALVATA NEL TELEFONO
 if rosa_salvata_str:
     st.sidebar.success("✅ Rosa ricaricata dalla memoria del telefono!")
     nomi_salvati = rosa_salvata_str.split(",")
@@ -89,43 +91,48 @@ if rosa_salvata_str:
     
     st.sidebar.markdown("---")
     usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa", value=True)
-    if st.sidebar.button("🗑️ Rimuovi Rosa", use_container_width=True):
+    if st.sidebar.button("🗑️ Rimuovi Rosa (Inserisci Nuova)", use_container_width=True):
         cookie_manager.delete("algo_custom_rosa")
         st.rerun()
 
+# SCENARIO B: NESSUNA ROSA SALVATA -> MOSTRA OPZIONI DI INSERIMENTO
 else:
     metodo_rosa = st.sidebar.radio(
         "Scegli come importare la rosa:",
         ["📸 Scansiona Screenshot OCR", "🔍 Ricerca Nome Lega", "✏️ Incolla Nomi", "📁 File CSV/Excel"]
     )
 
-    # NUOVO BLOCCO OCR
+    # --- METODO 1: OCR MULTISCREEN ---
     if metodo_rosa == "📸 Scansiona Screenshot OCR":
         st.sidebar.markdown("---")
         usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa", value=True)
-        st.sidebar.info("Scatta uno screenshot della tua rosa sull'app Fantacalcio e caricalo qui.")
+        st.sidebar.info("Scatta 2 o 3 screenshot per inquadrare tutta la rosa e caricali insieme.")
         
-        uploaded_img = st.sidebar.file_uploader("Carica Immagine", type=["png", "jpg", "jpeg"])
+        uploaded_imgs = st.sidebar.file_uploader("Carica Screenshot", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
         
-        if uploaded_img is not None:
+        if uploaded_imgs:
             with st.spinner("🧠 Intelligenza Artificiale in lettura..."):
-                img = Image.open(uploaded_img)
-                testo_grezzo = pytesseract.image_to_string(img)
+                testo_grezzo_totale = ""
+                for uploaded_img in uploaded_imgs:
+                    img = Image.open(uploaded_img)
+                    testo_grezzo_totale += pytesseract.image_to_string(img) + "\n"
                 
-                # Pulizia e Fuzzy Matching
-                righe = [r.strip() for r in testo_grezzo.split('\n') if len(r.strip()) > 2]
+                righe = [r.strip() for r in testo_grezzo_totale.split('\n') if len(r.strip()) > 2]
                 nomi_db = df_serie_a["Nome"].tolist()
                 
                 giocatori_trovati = []
                 for riga in righe:
-                    match, score = process.extractOne(riga, nomi_db)
-                    if score >= 80:  # Soglia di precisione (ignora parole inutili come "Voti" o "Ruolo")
-                        giocatori_trovati.append(match)
+                    risultato = process.extractOne(riga, nomi_db)
+                    if risultato:
+                        match, score = risultato
+                        if score >= 80:  # Soglia per ignorare Voti, Ruoli, ecc.
+                            giocatori_trovati.append(match)
                 
                 giocatori_unici = list(set(giocatori_trovati))
                 rosa_utente = df_serie_a[df_serie_a["Nome"].isin(giocatori_unici)].copy()
-                st.sidebar.success(f"Scansione OCR completata! Trovati {len(rosa_utente)} giocatori.")
+                st.sidebar.success(f"Scansione completata! Trovati {len(rosa_utente)} giocatori.")
 
+    # --- METODO 2: RICERCA LEGA ---
     elif metodo_rosa == "🔍 Ricerca Nome Lega":
         st.sidebar.markdown("---")
         if "step_ricerca" not in st.session_state: st.session_state["step_ricerca"] = 1
@@ -148,12 +155,15 @@ else:
                 st.session_state["step_ricerca"] = 1
                 st.rerun()
 
+    # --- METODO 3: INCOLLA NOMI MANUALMENTE ---
     elif metodo_rosa == "✏️ Incolla Nomi":
         st.sidebar.markdown("---")
         usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa", value=True)
         testo = st.text_area("Incolla i nomi separati da una virgola:")
-        if testo: rosa_utente = df_serie_a[df_serie_a["Nome"].isin([n.strip() for n in testo.split(',') if n.strip()])].copy()
+        if testo: 
+            rosa_utente = df_serie_a[df_serie_a["Nome"].isin([n.strip() for n in testo.split(',') if n.strip()])].copy()
 
+    # --- METODO 4: UPLOAD CSV ---
     elif metodo_rosa == "📁 File CSV/Excel":
         st.sidebar.markdown("---")
         usa_modificatore = st.sidebar.checkbox("Modificatore di Difesa", value=True)
@@ -161,16 +171,18 @@ else:
         if uploaded_file:
             df_user = pd.read_csv(uploaded_file, sep=';', encoding='latin1') if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
             col_nome = [c for c in df_user.columns if 'nome' in str(c).lower() or 'giocatore' in str(c).lower()]
-            if col_nome: rosa_utente = df_serie_a[df_serie_a["Nome"].isin(df_user[col_nome[0]].dropna().unique())].copy()
+            if col_nome: 
+                rosa_utente = df_serie_a[df_serie_a["Nome"].isin(df_user[col_nome[0]].dropna().unique())].copy()
 
-    # SALVATAGGIO AUTOMATICO 
+    # SALVATAGGIO AUTOMATICO (Viene eseguito solo se la rosa è stata appena caricata ed è valida)
     if not rosa_utente.empty:
         nomi_da_salvare = ",".join(rosa_utente["Nome"].tolist())
         cookie_manager.set("algo_custom_rosa", nomi_da_salvare, expires_at=datetime.datetime.now() + datetime.timedelta(days=365))
-        st.sidebar.success("💾 Rosa salvata!")
+        st.sidebar.success("💾 Rosa salvata! Dalla prossima volta si caricherà in automatico.")
 
-# Fallback 
+# Fallback di emergenza/Demo se l'utente non ha ancora caricato nulla
 if rosa_utente.empty:
+    st.info("💡 Nessuna rosa caricata. Visualizzazione della Rosa di Esempio (Demo).")
     rosa_default = ["Svilar", "Carnesecchi", "Martinez Jo.", "Buongiorno", "Bastoni", "Bremer", "Dimarco", "Di Lorenzo", "Pavard", "Gatti", "Calhanoglu", "Pulisic", "Zaccagni", "Barella", "Pellegrini Lo.", "Loftus-Cheek", "Ederson", "Lautaro", "Vlahovic", "Lookman", "Dybala", "Castellanos", "Pinamonti"]
     rosa_utente = df_serie_a[df_serie_a["Nome"].isin(rosa_default)].copy()
 
@@ -181,18 +193,26 @@ def calcola_indici(df_rosa, mod_attivo, porta_inv):
     df = df_rosa.copy()
     cond_mov = df["R"] != "P"
     df.loc[cond_mov, "Indice_Algo"] = (df["Fm"] * 0.7) + (df["Debolezza_Difesa"] * 0.3) + df["Fattore_Campo"] + df["Bonus_Specialista"]
+    
     cond_por = df["R"] == "P"
     df.loc[cond_por, "Indice_Algo"] = (df["Fm"] * 0.7) + ((10 - df["Forza_Attacco"]) * 0.3) + df["Fattore_Campo"]
+    
     if mod_attivo:
         cond_def = df["R"] == "D"
         df.loc[cond_def, "Indice_Algo"] = (df["Mv"] * 0.6) + (df["Debolezza_Difesa"] * 0.2) + (df["Fm"] * 0.2) + df["Fattore_Campo"]
         df.loc[cond_def & (df["Mv"] >= 6.25), "Indice_Algo"] += 0.80
+        
     df["Indice_Algo"] = df["Indice_Algo"].round(2)
     return df
 
 df_rosa_calcolata = calcola_indici(rosa_utente, usa_modificatore, bonus_porta_inviolata)
 
-moduli_classic = {"3-4-3": {"D":3,"C":4,"A":3}, "3-5-2": {"D":3,"C":5,"A":2}, "4-3-3": {"D":4,"C":3,"A":3}, "4-4-2": {"D":4,"C":4,"A":2}}
+moduli_classic = {
+    "3-4-3": {"D":3,"C":4,"A":3}, "3-5-2": {"D":3,"C":5,"A":2}, 
+    "4-3-3": {"D":4,"C":3,"A":3}, "4-4-2": {"D":4,"C":4,"A":2},
+    "4-5-1": {"D":4,"C":5,"A":1}, "5-3-2": {"D":5,"C":3,"A":2}, 
+    "5-4-1": {"D":5,"C":4,"A":1}
+}
 
 def genera_formazione(df_calcolato, schema_mod, mod_attivo):
     schema = moduli_classic[schema_mod]
@@ -221,23 +241,35 @@ def genera_formazione(df_calcolato, schema_mod, mod_attivo):
                 switches.append(f"🔄 **{r}**: {u_tit.iloc[0]['Nome']} ({u_tit.iloc[0]['Indice_Algo']}) vs {p_pan.iloc[0]['Nome']} ({p_pan.iloc[0]['Indice_Algo']})")
     return pnt.round(2), tit, pan, switches
 
+# Trova in automatico il modulo migliore in base alla rosa
 miglior_mod = max(moduli_classic.keys(), key=lambda m: genera_formazione(df_rosa_calcolata, m, usa_modificatore)[0])
 
 # -----------------------------------------------------------------------------
-# 5. VISUALIZZAZIONE
+# 5. OUTPUT E VISUALIZZAZIONE
 # -----------------------------------------------------------------------------
 st.markdown("---")
-modulo_selezionato = st.selectbox("Modulo", list(moduli_classic.keys()), index=list(moduli_classic.keys()).index(miglior_mod))
+col_mod, col_info = st.columns([2, 1])
+with col_mod:
+    modulo_selezionato = st.selectbox(
+        "Seleziona Modulo Tattico", 
+        list(moduli_classic.keys()), 
+        index=list(moduli_classic.keys()).index(miglior_mod)
+    )
+    if modulo_selezionato == miglior_mod:
+        st.caption(f"⭐ **Modulo consigliato da Algo-Custom**")
+
 pnt_totale, df_titolari, df_panchina, lista_switches = genera_formazione(df_rosa_calcolata, modulo_selezionato, usa_modificatore)
 
 col_tit, col_pan = st.columns(2)
 with col_tit:
     st.subheader("🟢 11 Titolari")
-    st.dataframe(df_titolari[["R", "Nome", "Squadra", "Prossimo_Avversario", "Indice_Algo"]], hide_index=True)
+    st.dataframe(df_titolari[["R", "Nome", "Squadra", "Prossimo_Avversario", "Indice_Algo"]], use_container_width=True, hide_index=True)
+
 with col_pan:
     st.subheader("🟡 Panchina")
-    st.dataframe(df_panchina[["R", "Nome", "Squadra", "Prossimo_Avversario", "Indice_Algo"]], hide_index=True)
+    st.dataframe(df_panchina[["R", "Nome", "Squadra", "Prossimo_Avversario", "Indice_Algo"]], use_container_width=True, hide_index=True)
 
 if lista_switches:
-    st.warning("⚠️ **Ballottaggi / Switch Caldi Rilevati:**")
-    for sw in lista_switches: st.markdown(f"- {sw}")
+    st.warning("⚠️ **Ballottaggi / Switch Caldi Rilevati (Differenza indice minima):**")
+    for sw in lista_switches: 
+        st.markdown(f"- {sw}")
