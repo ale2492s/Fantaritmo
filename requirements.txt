@@ -3,3 +3,7 @@ pandas
 openpyxl
 requests
 beautifulsoup4
+extra-streamlit-components
+Pillow
+pytesseract
+thefuzz
